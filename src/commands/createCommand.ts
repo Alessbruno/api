@@ -1,0 +1,81 @@
+import { Command } from "commander";
+import { createFile } from "../domain/file";
+import * as fs from "fs";
+import * as path from "path";
+import Table from "cli-table3";
+import { formatDate, getElapsedTime, columnNames, columnWidth, validateApiKey } from "./utils/util";
+import { getRuntimeConfig } from "../config";
+import { ApiKeysModel } from "../infra/database/models";
+
+export const createCommand = new Command()
+  .name("create")
+  .description("Create a new ddoc from a file")
+  .argument("<filepath>", "Path to the file to create ddoc from")
+  .action(async (filepath: string) => {
+    try {
+      if (!fs.existsSync(filepath)) {
+        throw new Error(`File not found: ${filepath}`);
+      }
+
+      const runtimeConfig = getRuntimeConfig();
+
+      const apiKey = runtimeConfig.API_KEY;
+
+      validateApiKey(apiKey);
+
+      const apiKeyInfo = await ApiKeysModel.findByApiKey(apiKey);
+      const portalAddress = apiKeyInfo?.portalAddress as string;
+
+      if (!portalAddress) throw new Error("Portal address is required");
+
+      const content = fs.readFileSync(filepath, "utf-8");
+      if (!content || content.trim().length === 0) {
+        console.error("Error creating ddoc: File content cannot be empty. Add some content to the file and try again.");
+        process.exit(1);
+      }
+
+      const basename = path.basename(filepath);
+      const lastDotIndex = basename.lastIndexOf(".");
+      const title = lastDotIndex > 0 ? basename.substring(0, lastDotIndex) : basename;
+      const file = await createFile({ title, content, portalAddress });
+
+      console.log("\nDdoc created successfully!\n");
+      const table = new Table({
+        head: [
+          columnNames.ddocId,
+          columnNames.title,
+          columnNames.status,
+          columnNames.local,
+          columnNames.onchain,
+          columnNames.created,
+          columnNames.lastModified,
+        ],
+        colWidths: [
+          columnWidth[columnNames.ddocId],
+          columnWidth[columnNames.title],
+          columnWidth[columnNames.status],
+          columnWidth[columnNames.local],
+          columnWidth[columnNames.onchain],
+          columnWidth[columnNames.created],
+          columnWidth[columnNames.lastModified],
+        ],
+        style: { head: [] },
+      });
+
+      const ddocId = (file as any).ddocId || "N/A";
+      table.push([
+        ddocId,
+        file.title.length > 23 ? file.title.substring(0, 20) + "..." : file.title,
+        file.syncStatus,
+        file.localVersion,
+        file.onchainVersion,
+        formatDate(file.createdAt),
+        getElapsedTime(file.updatedAt),
+      ]);
+
+      console.log(table.toString());
+    } catch (error: any) {
+      console.error("Error creating ddoc:", error.message);
+      process.exit(1);
+    }
+  });
